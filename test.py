@@ -8,45 +8,51 @@ import time
 """"
 Helper methods:
 """
-MIN_DATA_POINTS = 9
-def prep_file(files_string):
+MIN_DATA_POINTS = 28
+def prep_file(files):
     """"Method to preprocess the file based on the stock dataset
     parameters:
-        file_name - string containing file name
+        file_name - file name
     Return ([[date_time],[value]],has_enough_lines)
         date_time - date and time of stock
         value - closing prices at that time
         has_enough_lines - boolean specifying if there are more than 10 datapoints"""
 
-    files = files_string.split('\r\n\r\n') #Split the files
-
     #Split each file into single lines (datapoints)
     lines = []
     for file in files:
         lines.append(file.split("\r\n"))
-    #print(lines)
+
 
     date_times = []
     vals = []
     counter = 0
+    avg_cnt = 0
+    avg_val = 0
     for file in lines:
-        prev_date = ""
         prev_time = ""
         file = [line for line in file if line]
+        prev_date = file[0].split(",")[0]
         for line in file:
             split = line.split(",")
-            date_times.append(split[0] + " " + split[1])
-            vals.append(float(split[5]))
-            counter += 1
+            duplicate = prev_date == split[0]
+            if not duplicate:
+                date_times.append(prev_date)
+                vals.append(avg_val / avg_cnt)
+                avg_val = 0
+                avg_cnt = 0
+                counter += 1
+            avg_cnt += 1
+            avg_val += float(split[5])
+            prev_date = split[0]
+        date_times.append(prev_date)
+        vals.append(avg_val / avg_cnt)
     date_times, idx = np.unique(date_times, return_index = True)
     values = np.take(vals, idx)
     if counter > MIN_DATA_POINTS and len(values) == len(date_times):
         return ([date_times, values], True)
     else:
         return ([date_times, values], False)
-
-def prep(line):
-    return (line.split(",")[5], 1)
 
 def post_prep(closing_prices):
     empty_dates = []
@@ -168,8 +174,8 @@ def prep_for_corr_pearson(input1, input2):
     input2 = [[<dates], [<values>]]
     Computes data based on values for which the date is present in both inputs
     '''
-    #print(input1)
-    #print(input2)
+    if input1 is None or input2 is None:
+        return 100
     matches, ind_inp1, ind_inp2 = np.intersect1d(input1[0], input2[0], return_indices=True)
     series1 = np.array(input1[1])[ind_inp1]
     series2 = np.array(input2[1])[ind_inp2]
@@ -181,8 +187,8 @@ def prep_for_corr_spearman(input1, input2):
     input2 = [[<dates], [<values>]]
     Computes data based on values for which the date is present in both inputs
     '''
-    #print(input1)
-    #print(input2)
+    if input1 is None or input2 is None:
+        return 100
     matches, ind_inp1, ind_inp2 = np.intersect1d(input1[0], input2[0], return_indices=True)
     series1 = np.array(input1[1])[ind_inp1]
     series2 = np.array(input2[1])[ind_inp2]
@@ -191,6 +197,8 @@ def prep_for_corr_spearman(input1, input2):
 
 def pearsonrcustom(x, y):
     # Custom function based on scipy framework
+    if len(x) < 1 or len(y) < 1:
+        return 101
     n = len(x)
     x = np.asarray(x)
     y = np.asarray(y)
@@ -213,6 +221,8 @@ def pearsonrcustom(x, y):
 
 
 def cust_spearmanr(x, y):
+    if len(x) < 1 or len(y) < 1:
+        return 101
     ranksx = ranking(x)
     ranksy = ranking(y)
     r = pearsonrcustom(ranksx, ranksy)
@@ -257,10 +267,10 @@ directory_path_2020 = "C:/Users/tzvet/OneDrive - TU Eindhoven/Masters Year 1/Q4/
 directory_path_2018 = "C:/Users/tzvet/OneDrive - TU Eindhoven/Masters Year 1/Q4/2IMD15/Milestones/Milestone_1/2018/"
 directory_path_2020_test = "C:/Users/tzvet/OneDrive - TU Eindhoven/Masters Year 1/Q4/2IMD15/Milestones/Milestone_1/2020_test/"
 directory_path_2020_1KB = "C:/Users/tzvet/OneDrive - TU Eindhoven/Masters Year 1/Q4/2IMD15/Milestones/Milestone_1/2020_1KB/"
+directory_path_2020_no_probl = "C:/Users/tzvet/OneDrive - TU Eindhoven/Masters Year 1/Q4/2IMD15/Milestones/Milestone_1/2020_no_probl/"
 
 # Final path chosen
-final_path = directory_path_2020_test # change this to set the directory you want
-#STOCK_DIR = directory_path_2020_4
+final_path = directory_path_2020 # change this to set the directory you want
 
 # Get the file names of all the files in the given directory
 path = final_path
@@ -275,9 +285,9 @@ for file_name in file_names:
     if name not in set_stock_names:
         set_stock_names.add(name)
         stock_names.append(name)
-#file_names.remove(folder_to_save_to)
+
 num_files = len(stock_names)
-print(stock_names)
+#print(stock_names)
 
 # Initilialize 2D array containing the indices to be set
 table_indices = init_table_indices(num_files)
@@ -288,48 +298,90 @@ for file in stock_names:
     indices = get_indices(index_file, table_indices)
     list_tuple_table_indices.append((file, indices))
 
+# Threshold
+T = 0.95
 
-start2 = time.time()
+start_spark = time.time()
 """"
     Spark structure:
 """
 
 # Convert list_tuole_indices to RDD to join in the next step
 rdd_tuple_indices = sc.parallelize(list_tuple_table_indices)
-#rdd_tuple_indices.foreach(lambda x: print(x))
 
-final = sc.wholeTextFiles(final_path).map(lambda pair: ('_'.join(pair[0].split('/')[-1].split('_')[1:]), pair[1]))\
-    .map(lambda pair: (pair[0].split('.')[0].lower(), pair[1])).reduceByKey(lambda accum, st: accum + st)\
-    .map(lambda pair: (pair[0], prep_file(pair[1])))\
+
+final = sc.wholeTextFiles(final_path)\
+    .map(lambda pair: ('_'.join(pair[0].split('/')[-1].split('_')[1:]).split('.')[0].lower(), pair[1]))\
+    .groupByKey().map(lambda pair : (pair[0], list(pair[1]))).map(lambda pair: (pair[0], prep_file(pair[1])))\
     .filter(lambda pair: pair[1][1] == True).map(lambda pair: (pair[0], pair[1][0]))\
-    .rightOuterJoin(rdd_tuple_indices).map(lambda pair: transform_tuple(pair)).flatMapValues(lambda x: x) \
-    .map(lambda pair: swap_key_values(pair))#.reduceByKey(lambda tup1, tup2: pearson_correlation(tup1[1], tup2[1]))
+    .rightOuterJoin(rdd_tuple_indices).map(lambda pair: transform_tuple(pair)).flatMapValues(lambda x: x)\
+    .map(lambda pair: swap_key_values(pair))
+
+    #.reduceByKey(lambda accum, st: accum + st)\ # This goes instead of reduceByKey
+    #.map(lambda pair: (pair[0], prep_file(pair[1])))\
+    #.filter(lambda pair: pair[1][1] == True).map(lambda pair: (pair[0], pair[1][0]))\
+    #.rightOuterJoin(rdd_tuple_indices).map(lambda pair: transform_tuple(pair)).flatMapValues(lambda x: x) \
+    #.map(lambda pair: swap_key_values(pair))#.reduceByKey(lambda tup1, tup2: pearson_correlation(tup1[1], tup2[1]))
 
 rdd_tuple_indices.unpersist()
-print("Preprocessing takes: " + str(time.time() - start2))
-#final.foreach(lambda x: print(x))
+print("Preprocessing takes: " + str(time.time() - start_spark))
+
+
 #final.saveAsTextFile(final_path+"Final")
 print("Pearson")
 start_pearson = time.time()
-pearson = final.reduceByKey(lambda tup1, tup2: prep_for_corr_pearson(tup1[1], tup2[1]))
-#pearson.foreach(lambda x: print(x))
+pearson = final.reduceByKey(lambda tup1, tup2: prep_for_corr_pearson(tup1[1], tup2[1]))\
+    .filter(lambda pair: pair[1] < 2 and pair[1] > -2).filter(lambda pair: pair[1] >= T or pair[1] <= T)\
+    .sortBy(lambda pair: pair[1], ascending=False).take(10)
 print("COmpiled pearson in: " + str(time.time()-start_pearson))
+
 
 print("Spearman")
 start_spearman = time.time()
-spearman = final.reduceByKey(lambda tup1, tup2: prep_for_corr_spearman(tup1[1], tup2[1]))
-#spearman.foreach(lambda x: print(x))
+spearman = final.reduceByKey(lambda tup1, tup2: prep_for_corr_spearman(tup1[1], tup2[1]))\
+    .filter(lambda pair: pair[1] < 2 and pair[1] > -2).filter(lambda pair: pair[1] >= T or pair[1] <= T)\
+    .sortBy(lambda pair: pair[1], ascending=False).take(10)
 print("COmpiled spearman in: " + str(time.time()-start_spearman))
-final.unpersist()
-print("Pearson")
-#pearson.foreach(lambda x: print(x))
-pearson.saveAsTextFile(final_path+"Pearson")
-###pearson_local = pearson.take(100).collect()
-###print(pearson_local)
-print("Spearman")
-#spearman.foreach(lambda x: print(x))
-spearman.saveAsTextFile(final_path+"Spearman")
-###spearman_local = spearman.take(100).collect()
-###print(spearman_local)
-print(time.time()-start2)
 
+final.unpersist()
+sys_time = time.time()
+#print("Pearson")
+#print(pearson)
+#pearson.saveAsTextFile(final_path+"Pearson_"+str(sys_time))
+#pearson.unpersist()
+
+#print("Spearman")
+#print(spearman)
+#spearman.saveAsTextFile(final_path+"Spearman_"+str(sys_time))
+#spearman.unpersist()
+sc.stop()
+print("Total time: " + str(time.time()-start_spark))
+
+
+def get_stock_names(cell_index):
+    for row in range(num_files):
+        for col in range(num_files):
+            if table_indices[row][col] == cell_index:
+                return stock_names[row], stock_names[col]
+
+pearson_top_stocks = []
+for res in pearson:
+    stock_1, stock_2 = get_stock_names(res[0])
+    pearson_top_stocks.append(((stock_1, stock_2), res[1]))
+
+spearman_top_stocks = []
+for res in spearman:
+    stock_1, stock_2 = get_stock_names(res[0])
+    spearman_top_stocks.append(((stock_1, stock_2), res[1]))
+
+print("TOP PEARSON STOCKS")
+print(pearson_top_stocks)
+
+print("TOP SPEARMAN STOCKS")
+print(spearman_top_stocks)
+
+with open("Top pearson.txt", 'w') as filehandle_pearson:
+    filehandle_pearson.writelines("%s\n" % str(res) for res in pearson_top_stocks)
+
+with open("Top spearman.txt", 'w') as filehandle_spearman:
+    filehandle_spearman.writelines("%s\n" % str(res) for res in spearman_top_stocks)
